@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "@effect/platform-node": "npm:@effect/platform-node",
+    "@effect/platform": "npm:@effect/platform",
+    "effect": "npm:effect"
+  }
+}

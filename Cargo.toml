@@ -1,0 +1,19 @@
+[package]
+description = "A Rust WebAssembly library that provides seamless integration between Node.js's IncomingMessage and Rust's hyper::Request"
+edition = "2021"
+exclude = ["example/*"]
+homepage = "https://github.com/forgen-org/wasm-http-hyper"
+license = "MIT"
+name = "wasm-http-hyper"
+readme = "README.md"
+repository = "https://github.com/forgen-org/wasm-http-hyper"
+version = "0.1.0"
+
+[dependencies]
+gloo-utils = "0.2.0"
+http-body-util = "0.1.2"
+hyper = "1.6.0"
+js-sys = "0.3.77"
+wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4.50"
+
