@@ -5,6 +5,7 @@ use js_sys::Uint8Array;
 use std::collections::HashMap;
 use tower::util::ServiceExt;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures;
 use wasm_bindgen_test::*;
 
 use wasm_http_hyper::IncomingMessage;
@@ -44,6 +45,9 @@ extern "C" {
 
 #[wasm_bindgen_test]
 async fn test_axum_router() {
+    use axum::response::Response;
+    use wasm_http_hyper::axum::IntoJs;
+
     // Create a simple Axum router
     let app = Router::new().route(
         "/test",
@@ -69,16 +73,16 @@ async fn test_axum_router() {
     let request: Request<axum::body::Body> = Request::from(&message);
 
     // Process the request through the router
-    let response = app.oneshot(request).await.unwrap();
+    let response: Response = app.oneshot(request).await.unwrap();
 
     // Verify the response
     assert_eq!(response.status(), 200);
 
-    // Get the response body
-    let body = response.into_body();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    // Verify the JSON response matches what we sent
-    assert_eq!(body_str, json_data);
+    let response_promise: js_sys::Promise = response.into_js();
+    let js_value = wasm_bindgen_futures::JsFuture::from(response_promise)
+        .await
+        .unwrap();
+    let response_str: String = js_value.as_string().unwrap();
+    let response_json = serde_json::from_str::<serde_json::Value>(&response_str).unwrap();
+    assert_eq!(response_json, serde_json::json!({"hello":"world"}));
 }

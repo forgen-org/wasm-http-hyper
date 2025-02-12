@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use futures::StreamExt;
 use gloo_utils::format::JsValueSerdeExt;
-use js_sys::{Function, Object, Uint8Array};
+use js_sys::Uint8Array;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
