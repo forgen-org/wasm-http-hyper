@@ -1,7 +1,8 @@
-use std::{collections::HashMap, rc::Rc, str::FromStr, sync::Mutex};
-
+use bytes::Bytes;
+use futures::Stream;
+use futures::StreamExt;
 use gloo_utils::format::JsValueSerdeExt;
-use hyper::{Method, Request};
+use std::{collections::HashMap, future::Future};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -13,87 +14,60 @@ import { IncomingMessage } from "node:http";
 extern "C" {
     #[wasm_bindgen(typescript_type = "IncomingMessage")]
     pub type IncomingMessage;
+
+    #[wasm_bindgen(method)]
+    pub fn on(this: &IncomingMessage, event: &str, callback: &js_sys::Function) -> JsValue;
+
+    #[wasm_bindgen(method, getter)]
+    pub fn method(this: &IncomingMessage) -> String;
+
+    #[wasm_bindgen(method, getter)]
+    pub fn url(this: &IncomingMessage) -> String;
+
+    #[wasm_bindgen(method, getter, js_name = headers)]
+    pub fn headers(this: &IncomingMessage) -> js_sys::Object;
 }
 
 impl IncomingMessage {
-    pub async fn parse(&self) -> Request<Vec<u8>> {
-        let js_value: JsValue = self.into();
-
-        let body = self.parse_body().await;
-        let headers = js_sys::Reflect::get(&js_value, &JsValue::from_str("headers"))
-            .expect("headers is not a map")
-            .into_serde::<HashMap<String, String>>()
-            .expect("headers is not a map");
-        let method = js_sys::Reflect::get(&js_value, &JsValue::from_str("method"))
-            .expect("method is not a string")
-            .as_string()
-            .expect("method is not a string");
-        let uri = js_sys::Reflect::get(&js_value, &JsValue::from_str("url"))
-            .expect("url is not a string")
-            .as_string()
-            .expect("url is not a string");
-
-        let mut request_builder = Request::builder()
-            .method(Method::from_str(&method).expect("failed to parse method"))
-            .uri(uri);
-        for (key, value) in headers {
-            request_builder = request_builder.header(key, value);
+    pub fn body_fut(&self) -> impl Future<Output = Bytes> {
+        let body = self.body_stream();
+        async move {
+            let bytes: Vec<_> = body.collect().await;
+            let mut result = Vec::new();
+            for chunk in bytes {
+                result.extend_from_slice(&chunk);
+            }
+            Bytes::from(result)
         }
-        let request = request_builder.body(body).expect("failed to build request");
-        request
     }
 
-    async fn parse_body(&self) -> Vec<u8> {
-        let js_value: JsValue = self.into();
-        let on = js_sys::Reflect::get(&js_value, &JsValue::from_str("on"))
-            .expect("on is not a function");
-        let on_fn = js_sys::Function::from(on);
+    pub fn body_stream(&self) -> impl Stream<Item = Bytes> {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
 
-        let body = Rc::new(Mutex::new(Vec::new()));
-        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-            let data_handler = Closure::wrap(Box::new({
-                let body = body.clone();
-                move |chunk: JsValue| {
-                    let buffer = js_sys::Uint8Array::new(&chunk).to_vec();
-                    body.lock().unwrap().extend(buffer);
-                }
-            }) as Box<dyn FnMut(JsValue)>);
+        let data_handler = Closure::wrap(Box::new({
+            let tx = tx.clone();
+            move |chunk: JsValue| {
+                let buffer = js_sys::Uint8Array::new(&chunk).to_vec();
+                let _ = tx.unbounded_send(Bytes::from(buffer));
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        let end_handler = Closure::wrap(Box::new(move || {
+            let _ = tx.close_channel();
+        }) as Box<dyn FnMut()>);
 
-            let end_handler = Closure::wrap(Box::new({
-                move || {
-                    resolve
-                        .call0(&JsValue::NULL)
-                        .expect("failed to call resolve");
-                }
-            }) as Box<dyn FnMut()>);
+        self.on("data", data_handler.as_ref().unchecked_ref());
+        self.on("end", end_handler.as_ref().unchecked_ref());
 
-            on_fn
-                .call2(
-                    &js_value,
-                    &JsValue::from_str("data"),
-                    &data_handler.as_ref().unchecked_ref(),
-                )
-                .expect("failed to call data");
+        // Prevent handlers from being dropped
+        data_handler.forget();
+        end_handler.forget();
 
-            on_fn
-                .call2(
-                    &js_value,
-                    &JsValue::from_str("end"),
-                    &end_handler.as_ref().unchecked_ref(),
-                )
-                .expect("failed to call end");
+        rx
+    }
 
-            // Prevent handlers from being dropped
-            data_handler.forget();
-            end_handler.forget();
-        });
-
-        // Wait for all data to be received
-        wasm_bindgen_futures::JsFuture::from(promise)
-            .await
-            .expect("failed to wait for promise");
-
-        let body = body.lock().expect("failed to lock body").clone();
-        body
+    pub fn headers_map(&self) -> HashMap<String, String> {
+        self.headers()
+            .into_serde::<HashMap<String, String>>()
+            .expect("headers is not a map")
     }
 }
